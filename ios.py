@@ -1029,11 +1029,16 @@ class IOSDriver(NetworkDriver):
         """
         # default values.
         last_flapped = -1.0
-        command = 'show interface'
         interface = description = mac_address = speed = ''
         is_enabled = is_up = None
         interface_dict = {}
-        for line in command.splitlines():
+
+        # AWP send show interface
+        command = 'show interface'
+        output = self._send_command(command)
+        show_interface = self._send_command('show interface')
+
+        for line in show_interface.splitlines():
             interface_regex_1 = r"(Interface(.[a-z]{1,}.*))"
             interface_regex_2 = r"(.+?.is.(UP|DOWN))+(.+?.is.(DOWN|UP))"
             for pattern in (interface_regex_1, interface_regex_2):
@@ -1068,7 +1073,7 @@ class IOSDriver(NetworkDriver):
             if re.search(speed_regex, line):
                 speed_match = re.search(speed_regex, line)
                 speed = speed_match.groups()[0]
-                speed = int(round(speed))
+                speed = int(speed)
 
                 if interface == '':
                     raise ValueError("Interface attributes were \
