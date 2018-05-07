@@ -609,8 +609,9 @@ class IOSDriver(NetworkDriver):
         output = re.sub(r"^Time source is .*$", "", output, flags=re.M)
         return output.strip()
 
+        # AWP get optics needs testing on switch with SFP
     def get_optics(self):
-        command = 'show interfaces transceiver'
+        command = 'show system pluggable diagnostics'
         output = self._send_command(command)
 
         # Check if router supports the command
@@ -713,7 +714,7 @@ class IOSDriver(NetworkDriver):
                 return device_id
 
         lldp = {}
-        command = 'show lldp neighbors'
+        command = 'show lldp neighbors detail'
         output = self._send_command(command)
 
         # Check if router supports the command
@@ -722,8 +723,8 @@ class IOSDriver(NetworkDriver):
 
         # Process the output to obtain just the LLDP entries
         try:
-            split_output = re.split(r'^Device ID.*$', output, flags=re.M)[1]
-            split_output = re.split(r'^Total entries displayed.*$', split_output, flags=re.M)[0]
+            split_output = re.split(r'^Chassis ID.*$', output, flags=re.M)[1]
+            split_output = re.split(r'^---*$', split_output, flags=re.M)[0]
         except IndexError:
             return {}
 
@@ -801,11 +802,11 @@ class IOSDriver(NetworkDriver):
             command = 'show lldp neighbors {} detail'.format(interface)
 
         lldp_detail_output = self._send_command(command)
-        lldp_detail = re.split(r"^------------------.*$", lldp_detail_output, flags=re.M)[1:]
+        lldp_detail = re.split(r"^*$", lldp_detail_output, flags=re.M)[1:]
 
         # Newer IOS versions have 'Local Intf' defined in LLDP detail; older IOS doesn't :-(
         local_intf_detected = True
-        if not re.search(r"^Local Intf:\s+(\S+)\s*$", lldp_detail_output, flags=re.M):
+        if not re.search(r"^^Local\s+(\S+)\s*$", lldp_detail_output, flags=re.M):
             # Older IOS local interface is not in LLDP detail output
             local_intf_detected = False
 
@@ -819,14 +820,14 @@ class IOSDriver(NetworkDriver):
 
         for lldp_entry in lldp_detail:
             if local_intf_detected:
-                match = re.search(r"^Local Intf:\s+(\S+)\s*$", lldp_entry, flags=re.M)
+                match = re.search(r"^Local\s+(\S+)\s*$", lldp_entry, flags=re.M)
                 if match:
                     local_intf = match.group(1)
             else:
-                system_name_match = re.search(r"^System Name:\s+(\S.*)$", lldp_entry, flags=re.M)
+                system_name_match = re.search(r"^System Name ......................\s+(\S+)\s*$", lldp_entry, flags=re.M)
                 # Cisco is inconsistent on whether the domain name appears in LLDP brief output
                 system_name_alt = re.search(r"^System Name:\s+(\S.*?)\.", lldp_entry, flags=re.M)
-                port_id_match = re.search(r"^Port id:\s+(\S+)\s*$", lldp_entry, flags=re.M)
+                port_id_match = re.search(r"^Port ID ..........................\s+(\S+)\s*$", lldp_entry, flags=re.M)
                 # Try to find the local_intf from the reverse_neighbors table
                 if system_name_match and port_id_match:
                     port_id = port_id_match.group(1)
@@ -1596,27 +1597,27 @@ class IOSDriver(NetworkDriver):
         cpu hard-coded to cpu0 (i.e. only a single CPU)
         """
         environment = {}
-        cpu_cmd = 'show proc cpu'
-        mem_cmd = 'show memory statistics'
-        temp_cmd = 'show env temperature status'
+        cpu_cmd = 'show process'
+        mem_cmd = 'show memory pools'
+        temp_cmd = 'show system environment'
 
         output = self._send_command(cpu_cmd)
         environment.setdefault('cpu', {})
         environment['cpu'][0] = {}
-        environment['cpu'][0]['%usage'] = 0.0
+        environment['cpu'][0]['usage'] = 0.0
         for line in output.splitlines():
-            if 'CPU utilization' in line:
+            if 'System load averages' in line:
                 # CPU utilization for five seconds: 2%/0%; one minute: 2%; five minutes: 1%
-                cpu_regex = r'^.*one minute: (\d+)%; five.*$'
+                cpu_regex = r'^.*1 minute:.({1,}.*),.5.minutes:.({1,}.*),.15.minutes:.({1,}.*) $'
                 match = re.search(cpu_regex, line)
-                environment['cpu'][0]['%usage'] = float(match.group(1))
+                environment['cpu'][0]['usage'] = float(match.group())
                 break
 
         output = self._send_command(mem_cmd)
         for line in output.splitlines():
-            if 'Processor' in line:
+            if ' - total allocated           :    ' in line:
                 _, _, proc_total_mem, proc_used_mem, _ = line.split()[:5]
-            elif 'I/O' in line or 'io' in line:
+            elif ' - total allocated           :    ' in line or '   - in use                  :    ' in line:
                 _, _, io_total_mem, io_used_mem, _ = line.split()[:5]
         total_mem = int(proc_total_mem) + int(io_total_mem)
         used_mem = int(proc_used_mem) + int(io_used_mem)
@@ -1624,7 +1625,7 @@ class IOSDriver(NetworkDriver):
         environment['memory']['used_ram'] = used_mem
         environment['memory']['available_ram'] = total_mem
 
-        environment.setdefault('temperature', {})
+        environment.setdefault('Temp: Internal (Degrees C)', {})
         re_temp_value = re.compile('(.*) Temperature Value')
         # The 'show env temperature status' is not ubiquitous in Cisco IOS
         output = self._send_command(temp_cmd)
@@ -1768,15 +1769,14 @@ class IOSDriver(NetworkDriver):
             }
         """
         ntp_servers = {}
-        command = 'show run | include ntp server'
+        command = 'show run | include ntp'
         output = self._send_command(command)
 
         for line in output.splitlines():
+            if line.strip() == 'ntp master':
+             continue
             split_line = line.split()
-            if "vrf" == split_line[2]:
-                ntp_servers[split_line[4]] = {}
-            else:
-                ntp_servers[split_line[2]] = {}
+            ntp_servers[split_line[2]] = {}
 
         return ntp_servers
 
